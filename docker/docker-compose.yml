@@ -1,0 +1,159 @@
+# docker-compose.yml for cmangos-tbc.
+#
+# Run from the docker/ directory:
+#   docker compose build
+#   docker compose up -d
+#
+# Default ports are offset from acore (3724/8085) and vmangos (3725/8086).
+
+name: cmangos-tbc
+
+services:
+  cm-database:
+    container_name: cm-database
+    image: mysql:5.7
+    networks:
+      - cm-network
+    ports:
+      - ${CM_DB_EXTERNAL_PORT:-3308}:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CM_DB_ROOT_PASSWORD:-password}
+      MYSQL_USER: ${CM_DB_USER:-mangos}
+      MYSQL_PASSWORD: ${CM_DB_PASSWORD:-mangos}
+    volumes:
+      - ${CM_VOL_DB:-cm-database}:/var/lib/mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --sql-mode=
+      - --max-allowed-packet=256M
+    restart: unless-stopped
+    healthcheck:
+      test: "mysql --user=root --password=$$MYSQL_ROOT_PASSWORD --execute 'SHOW DATABASES;'"
+      interval: 5s
+      timeout: 10s
+      retries: 40
+
+  cm-db-import:
+    container_name: cm-db-import
+    image: cmangos/db-import:${CM_IMAGE_TAG:-latest}
+    networks:
+      - cm-network
+    build:
+      context: ..
+      target: db-import
+      dockerfile: docker/Dockerfile
+      args:
+        USER_ID: ${CM_USER_ID:-1000}
+        GROUP_ID: ${CM_GROUP_ID:-1000}
+        DOCKER_USER: ${CM_DOCKER_USER:-cmangos}
+    environment:
+      DB_HOST: cm-database
+      DB_PORT: 3306
+      DB_ROOT_PASSWORD: ${CM_DB_ROOT_PASSWORD:-password}
+      DB_USER: ${CM_DB_USER:-mangos}
+      DB_PASSWORD: ${CM_DB_PASSWORD:-mangos}
+      DB_REALMD: ${CM_DB_REALMD:-tbcrealmd}
+      DB_WORLD: ${CM_DB_WORLD:-tbcmangos}
+      DB_CHARACTERS: ${CM_DB_CHARACTERS:-tbccharacters}
+      DB_LOGS: ${CM_DB_LOGS:-tbclogs}
+      WORLD_DUMP_URL: ${CM_WORLD_DUMP_URL:-}
+    volumes:
+      - ${CM_VOL_CUSTOM_SQL:-./custom-sql}:/cmangos/custom-sql:ro
+    depends_on:
+      cm-database:
+        condition: service_healthy
+
+  cm-realmd:
+    container_name: cm-realmd
+    image: cmangos/realmd:${CM_IMAGE_TAG:-latest}
+    networks:
+      - cm-network
+    build:
+      context: ..
+      target: realmd
+      dockerfile: docker/Dockerfile
+      args:
+        USER_ID: ${CM_USER_ID:-1000}
+        GROUP_ID: ${CM_GROUP_ID:-1000}
+        DOCKER_USER: ${CM_DOCKER_USER:-cmangos}
+    environment:
+      DB_HOST: cm-database
+      DB_PORT: 3306
+      DB_USER: ${CM_DB_USER:-mangos}
+      DB_PASSWORD: ${CM_DB_PASSWORD:-mangos}
+      DB_REALMD: ${CM_DB_REALMD:-tbcrealmd}
+      DB_WORLD: ${CM_DB_WORLD:-tbcmangos}
+      DB_CHARACTERS: ${CM_DB_CHARACTERS:-tbccharacters}
+      DB_LOGS: ${CM_DB_LOGS:-tbclogs}
+    ports:
+      - ${CM_AUTH_EXTERNAL_PORT:-3727}:3724
+    volumes:
+      - ${CM_VOL_ETC:-./etc}:/cmangos/dist/etc
+      - ${CM_VOL_LOGS:-./logs}:/cmangos/dist/logs
+    depends_on:
+      cm-database:
+        condition: service_healthy
+      cm-db-import:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  cm-mangosd:
+    container_name: cm-mangosd
+    image: cmangos/mangosd:${CM_IMAGE_TAG:-latest}
+    networks:
+      - cm-network
+    build:
+      context: ..
+      target: mangosd
+      dockerfile: docker/Dockerfile
+      args:
+        USER_ID: ${CM_USER_ID:-1000}
+        GROUP_ID: ${CM_GROUP_ID:-1000}
+        DOCKER_USER: ${CM_DOCKER_USER:-cmangos}
+    stdin_open: true
+    tty: true
+    environment:
+      DB_HOST: cm-database
+      DB_PORT: 3306
+      DB_USER: ${CM_DB_USER:-mangos}
+      DB_PASSWORD: ${CM_DB_PASSWORD:-mangos}
+      DB_REALMD: ${CM_DB_REALMD:-tbcrealmd}
+      DB_WORLD: ${CM_DB_WORLD:-tbcmangos}
+      DB_CHARACTERS: ${CM_DB_CHARACTERS:-tbccharacters}
+      DB_LOGS: ${CM_DB_LOGS:-tbclogs}
+    ports:
+      - ${CM_WORLD_EXTERNAL_PORT:-8087}:8085
+    volumes:
+      - ${CM_VOL_ETC:-./etc}:/cmangos/dist/etc
+      - ${CM_VOL_LOGS:-./logs}:/cmangos/dist/logs
+      - ${CM_VOL_DATA:-cm-client-data}:/cmangos/dist/data:ro
+    depends_on:
+      cm-database:
+        condition: service_healthy
+      cm-db-import:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  cm-extractor:
+    container_name: cm-extractor
+    image: cmangos/extractor:${CM_IMAGE_TAG:-latest}
+    build:
+      context: ..
+      target: extractor
+      dockerfile: docker/Dockerfile
+      args:
+        USER_ID: ${CM_USER_ID:-1000}
+        GROUP_ID: ${CM_GROUP_ID:-1000}
+        DOCKER_USER: ${CM_DOCKER_USER:-cmangos}
+    volumes:
+      - ${CM_CLIENT_DIR:-./placeholder-client-dir}:/client:ro
+      - ${CM_VOL_DATA:-cm-client-data}:/output
+    profiles: [extractor]
+
+volumes:
+  cm-database:
+  cm-client-data:
+
+networks:
+  cm-network:
