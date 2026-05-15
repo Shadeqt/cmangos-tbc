@@ -57,6 +57,7 @@ RUN --mount=type=cache,target=/ccache,sharing=locked \
         -DCMAKE_BUILD_TYPE="$CTYPE" \
         -DCMAKE_INSTALL_PREFIX=/cmangos/dist \
         -DBUILD_EXTRACTORS=ON \
+        -DBUILD_MODULES=ON \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
