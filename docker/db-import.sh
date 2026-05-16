@@ -8,6 +8,10 @@
 #
 # After the upstream import:
 #   - applies migrations from sql/updates/<db>/ (per-DB subdir layout)
+#   - applies SQL bundled with cmangos-modules-style modules at
+#     /cmangos/modules/*/sql/install/<target>/*.sql, where <target> is one of
+#     world/characters/realmd/logs; files within a module run in alphabetical
+#     order, modules themselves run in directory order
 #   - applies user-supplied SQL from /cmangos/custom-sql/ on every run
 #     (suffix-tagged: *_world.sql, *_realmd.sql, *_characters.sql, *_logs.sql;
 #     expected to be self-idempotent)
@@ -31,6 +35,7 @@ set -euo pipefail
 
 SQL_DIR=/cmangos/sql
 CUSTOM_SQL_DIR=/cmangos/custom-sql
+MODULES_DIR=/cmangos/modules
 
 mysql_root() {
     mysql --host="$DB_HOST" --port="$DB_PORT" --user=root --password="$DB_ROOT_PASSWORD" "$@"
@@ -137,6 +142,41 @@ for subdir in "${!updates_for_db[@]}"; do
 done
 log "applied $total_applied source-tree migration files"
 
+# Apply SQL bundled with cmangos-modules-style modules. Each module under
+# /cmangos/modules/ may ship sql/install/<target>/*.sql where <target> is one
+# of world/characters/realmd/logs. Files within a module run in alphabetical
+# order (use 001_, 002_ prefixes to control sequencing). Modules themselves
+# run in directory order — modules must be order-independent. Files are
+# expected to be self-idempotent (UPDATE…WHERE, INSERT IGNORE, REPLACE INTO):
+# they re-run on every container start. The literal name `modules` is skipped
+# because it's the cmangos-modules main repo populated by FetchContent, not
+# a module itself.
+if [[ -d "$MODULES_DIR" ]]; then
+    declare -A module_db_for_target=(
+        [world]="$DB_WORLD"
+        [characters]="$DB_CHARACTERS"
+        [realmd]="$DB_REALMD"
+        [logs]="$DB_LOGS"
+    )
+
+    module_applied=0
+    for module_path in "$MODULES_DIR"/*/; do
+        module_name=$(basename "$module_path")
+        [[ "$module_name" == "modules" ]] && continue
+        for target in "${!module_db_for_target[@]}"; do
+            install_dir="${module_path}sql/install/${target}"
+            [[ -d "$install_dir" ]] || continue
+            target_db="${module_db_for_target[$target]}"
+            for f in $(ls "$install_dir" 2>/dev/null | grep -E '\.sql$' | sort); do
+                log "applying modules/$module_name/sql/install/$target/$f → $target_db"
+                mysql_user "$target_db" < "$install_dir/$f"
+                module_applied=$((module_applied + 1))
+            done
+        done
+    done
+    log "applied $module_applied module install SQL files"
+fi
+
 # Apply user-supplied SQL from the bind-mounted custom-sql/ directory. Runs
 # on every startup; files are expected to be self-idempotent.
 if [[ -d "$CUSTOM_SQL_DIR" ]]; then
@@ -161,13 +201,13 @@ if [[ -d "$CUSTOM_SQL_DIR" ]]; then
 fi
 
 # Realmlist row 1 — UPDATE-then-INSERT-IGNORE makes this safe whether or not
-# the upstream dump pre-populated the row. The host exposes mangosd on 8087,
-# so the client needs that port even though the container listens on 8085.
-log "seeding realmlist id=1 → 127.0.0.1:8087 (host-exposed)"
+# the upstream dump pre-populated the row. After the acore/cmangos port swap
+# cmangos-tbc holds the default WoW world port 8085 on the host.
+log "seeding realmlist id=1 → 127.0.0.1:8085 (host-exposed)"
 mysql_user "$DB_REALMD" <<SQL
-UPDATE realmlist SET name='cmangos', address='127.0.0.1', port=8087, realmbuilds='8606' WHERE id=1;
+UPDATE realmlist SET name='cmangos', address='127.0.0.1', port=8085, realmbuilds='8606' WHERE id=1;
 INSERT IGNORE INTO realmlist (id, name, address, port, icon, realmflags, timezone, allowedSecurityLevel, population, realmbuilds)
-VALUES (1, 'cmangos', '127.0.0.1', 8087, 1, 0, 1, 0, 0, '8606');
+VALUES (1, 'cmangos', '127.0.0.1', 8085, 1, 0, 1, 0, 0, '8606');
 SQL
 
 log "done"

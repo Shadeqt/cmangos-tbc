@@ -126,6 +126,7 @@ RUN apt-get update \
 USER $DOCKER_USER
 
 COPY --chown=$DOCKER_USER:$DOCKER_USER sql /cmangos/sql
+COPY --chown=$DOCKER_USER:$DOCKER_USER src/modules /cmangos/modules
 COPY --chown=$DOCKER_USER:$DOCKER_USER --chmod=755 \
     docker/db-import.sh /cmangos/db-import.sh
 
