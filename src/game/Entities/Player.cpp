@@ -21934,6 +21934,14 @@ AreaLockStatus Player::GetAreaTriggerLockStatus(AreaTrigger const* at, uint32& m
     if (!isRegularTargetMap && mapEntry->IsDungeon() && mapEntry->Expansion() != 1)
         return AREA_LOCKSTATUS_MISSING_DIFFICULTY;
 
+    // Custom: gate access to Outland (map 530). GMs are exempted explicitly because
+    // the IsGameMaster() bypass further down is unreachable after this early return.
+    if (at->target_mapId == 530 && !IsGameMaster())
+    {
+        miscRequirement = 1;
+        return AREA_LOCKSTATUS_INSUFFICIENT_EXPANSION;
+    }
+
     // Expansion requirement
     if (GetSession()->GetExpansion() < mapEntry->Expansion())
     {
