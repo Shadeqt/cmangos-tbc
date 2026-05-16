@@ -1,0 +1,13 @@
+###################################################################################################################
+# VANILLARESTORE SETTINGS
+#
+#    VanillaRestore.Enable
+#        Enable the VanillaRestore module. Currently a placeholder that hosts
+#        the 2.3.0 creature rank/HP revert SQL. No runtime code; toggling this
+#        flag has no in-process effect today.
+#        Default: 0 (disable)
+#                 1 (enable)
+#
+###################################################################################################################
+
+VanillaRestore.Enable = 0

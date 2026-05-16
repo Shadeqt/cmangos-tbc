@@ -62,6 +62,7 @@ RUN --mount=type=cache,target=/ccache,sharing=locked \
         -DCMAKE_INSTALL_PREFIX=/cmangos/dist \
         -DBUILD_EXTRACTORS=ON \
         -DBUILD_MODULES=ON \
+        -DBUILD_MODULE_VANILLARESTORE=ON \
         -DBUILD_MODULE_ACHIEVEMENTS=OFF \
         -DBUILD_MODULE_DUALSPEC=OFF \
         -DBUILD_MODULE_BARBER=OFF \

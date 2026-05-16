@@ -96,4 +96,9 @@ cmake_install.cmake
 #
 # Module files
 #
-src/modules/
+# Ignore direct children of src/modules/ by default — these are populated by
+# the cmangos-modules FetchContent step (modules/, PlayerBots/, transmog/, ...).
+# Re-include any local modules tracked in this repo with a !src/modules/<name>/
+# line below.
+src/modules/*
+!src/modules/vanillarestore/
