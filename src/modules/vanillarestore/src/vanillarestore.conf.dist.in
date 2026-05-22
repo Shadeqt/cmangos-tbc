@@ -8,6 +8,22 @@
 #        Default: 0 (disable)
 #                 1 (enable)
 #
+#    VanillaRestore.Map530Gate.Enable
+#        Block teleports to map 530 (Outland) unless the destination zone is in
+#        the AllowedZones whitelist. GMs are exempt. When blocking, the client
+#        receives a TRANSFER_ABORT_INSUF_EXPAN_LVL packet.
+#        Default: 0 (disable -- map 530 is fully accessible)
+#                 1 (enable -- map 530 is restricted to whitelisted zones)
+#
+#    VanillaRestore.Map530Gate.AllowedZones
+#        Comma-separated list of zone IDs on map 530 that remain accessible
+#        when the gate is enabled. Defaults cover Blood Elf and Draenei starter
+#        content (Eversong, Ghostlands, Silvermoon, Azuremyst, Bloodmyst, Exodar).
+#        Default: "3430,3433,3487,3524,3525,3557"
+#
 ###################################################################################################################
 
 VanillaRestore.Enable = 0
+
+VanillaRestore.Map530Gate.Enable = 0
+VanillaRestore.Map530Gate.AllowedZones = "3430,3433,3487,3524,3525,3557"

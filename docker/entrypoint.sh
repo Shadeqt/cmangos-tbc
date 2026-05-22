@@ -49,6 +49,7 @@ render "$REF_DIR/realmd.conf.dist"  "$CONF_DIR/realmd.conf"
 
 # Module configs: no DB/path substitutions needed, but render() handles the
 # "copy only if missing" semantics correctly for them too.
+render "$REF_DIR/vanillarestore.conf.dist" "$CONF_DIR/vanillarestore.conf"
 render "$REF_DIR/achievements.conf.dist"   "$CONF_DIR/achievements.conf"
 render "$REF_DIR/dualspec.conf.dist"       "$CONF_DIR/dualspec.conf"
 render "$REF_DIR/barber.conf.dist"         "$CONF_DIR/barber.conf"

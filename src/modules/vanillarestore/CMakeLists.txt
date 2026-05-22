@@ -1,9 +1,11 @@
 set(LIBRARY_NAME vanillarestore)
 
 file(GLOB vanillarestore_source ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h)
+file(GLOB vanillarestore_features_source ${CMAKE_CURRENT_SOURCE_DIR}/src/features/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/features/*.h)
 source_group("vanillarestore" FILES ${vanillarestore_source})
+source_group("vanillarestore\\features" FILES ${vanillarestore_features_source})
 
-set(LIBRARY_SRCS ${vanillarestore_source})
+set(LIBRARY_SRCS ${vanillarestore_source} ${vanillarestore_features_source})
 
 include_directories(${CMAKE_SOURCE_DIR}/src/modules/modules/src)
 add_definitions(-DENABLE_MODULES)

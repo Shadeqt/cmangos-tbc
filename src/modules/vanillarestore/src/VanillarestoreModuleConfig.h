@@ -1,6 +1,8 @@
 #pragma once
 #include "ModuleConfig.h"
 
+#include <string>
+
 namespace cmangos_module
 {
     class VanillarestoreModuleConfig : public ModuleConfig
@@ -11,5 +13,9 @@ namespace cmangos_module
 
     public:
         bool enabled;
+
+        // Map530Gate
+        bool map530Gate_enable;
+        std::string map530Gate_allowedZones;
     };
 }

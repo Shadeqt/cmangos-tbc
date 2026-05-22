@@ -3,6 +3,7 @@
 
 #include "Module.h"
 #include "VanillarestoreModuleConfig.h"
+#include "features/Map530Gate.h"
 
 namespace cmangos_module
 {
@@ -11,6 +12,12 @@ namespace cmangos_module
     public:
         VanillarestoreModule();
         const VanillarestoreModuleConfig* GetConfig() const override;
+
+        void OnInitialize() override;
+        bool OnPreTeleport(Player* player, uint32 mapid, float x, float y, float z) override;
+
+    private:
+        Map530Gate map530Gate;
     };
 }
 

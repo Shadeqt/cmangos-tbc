@@ -11,4 +11,15 @@ namespace cmangos_module
     {
         return (VanillarestoreModuleConfig*)Module::GetConfig();
     }
+
+    void VanillarestoreModule::OnInitialize()
+    {
+        const VanillarestoreModuleConfig* cfg = GetConfig();
+        map530Gate.Configure(cfg->map530Gate_enable, cfg->map530Gate_allowedZones);
+    }
+
+    bool VanillarestoreModule::OnPreTeleport(Player* player, uint32 mapid, float x, float y, float z)
+    {
+        return map530Gate.OnPreTeleport(player, mapid, x, y, z);
+    }
 }

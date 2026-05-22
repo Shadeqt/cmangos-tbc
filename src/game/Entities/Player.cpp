@@ -2016,6 +2016,13 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
     if (!InBattleGround() && mEntry->IsBattleGroundOrArena())
         return false;
 
+    // Module-level pre-teleport gating. Must run before MapEntrance-trigger
+    // synthesis below, so modules see the real destination coords (not the AT's
+    // target). A module returning true is responsible for any client-facing
+    // SendTransferAborted packet.
+    if (sModuleMgr.OnPreTeleport(this, mapid, x, y, z))
+        return false;
+
     // Get MapEntrance trigger if teleport to other -nonBG- map
     bool assignedAreaTrigger = false;
     if (GetMapId() != mapid && !mEntry->IsBattleGroundOrArena() && !at)
@@ -21933,14 +21940,6 @@ AreaLockStatus Player::GetAreaTriggerLockStatus(AreaTrigger const* at, uint32& m
     // Heroic allowed only on TBC instances
     if (!isRegularTargetMap && mapEntry->IsDungeon() && mapEntry->Expansion() != 1)
         return AREA_LOCKSTATUS_MISSING_DIFFICULTY;
-
-    // Custom: gate access to Outland (map 530). GMs are exempted explicitly because
-    // the IsGameMaster() bypass further down is unreachable after this early return.
-    if (at->target_mapId == 530 && !IsGameMaster())
-    {
-        miscRequirement = 1;
-        return AREA_LOCKSTATUS_INSUFFICIENT_EXPANSION;
-    }
 
     // Expansion requirement
     if (GetSession()->GetExpansion() < mapEntry->Expansion())
