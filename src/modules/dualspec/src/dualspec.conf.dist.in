@@ -1,0 +1,37 @@
+###################################################################################################################
+# DUALSPEC SETTINGS
+#
+#    DualSpec.Enable
+#        Master switch for the dual-spec module. When 0, all entrypoints
+#        (gossip option, .dualspec commands, addon channel handler) are
+#        rejected and existing dual-spec data (character_talent rows,
+#        characters.talentGroupsCount) is preserved unchanged across the
+#        toggle.
+#        Default: 0 (disable)
+#                 1 (enable)
+#
+#    DualSpec.MinLevel
+#        Minimum character level required to purchase a second talent
+#        specialization. Matches the WotLK retail default.
+#        Default: 40
+#
+#    DualSpec.Cost
+#        Cost in copper to purchase a second talent specialization.
+#        10000000 copper = 1000 gold (WotLK retail default). The gossip
+#        flow auto-deducts via gossip_menu_option.BoxMoney; the chat
+#        .dualspec buy path deducts manually after UpdateSpecCount.
+#        Default: 10000000
+#
+#    DualSpec.NPCEntry
+#        creature_template.entry of the Talent Specialist NPC that offers
+#        the purchase + switch gossip options. 0 disables the NPC-driven
+#        flow entirely; chat commands still work.
+#        Default: 0 (no NPC wired -- set this when M8 lands the NPC seed)
+#
+###################################################################################################################
+
+DualSpec.Enable = 0
+
+DualSpec.MinLevel = 40
+DualSpec.Cost = 10000000
+DualSpec.NPCEntry = 0
