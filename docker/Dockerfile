@@ -48,6 +48,10 @@ COPY dep            /cmangos/src/dep
 COPY sql            /cmangos/src/sql
 COPY src            /cmangos/src/src
 
+# Sibling cmangos-modules working tree (named build context).
+# CMake reads it from ${CMAKE_SOURCE_DIR}/../cmangos-modules = /cmangos/cmangos-modules.
+COPY --from=cmangos-modules . /cmangos/cmangos-modules
+
 ARG CACHEBUST=1
 
 WORKDIR /cmangos/build
@@ -58,6 +62,11 @@ RUN --mount=type=cache,target=/ccache,sharing=locked \
         -DCMAKE_INSTALL_PREFIX=/cmangos/dist \
         -DBUILD_EXTRACTORS=ON \
         -DBUILD_MODULES=ON \
+        -DBUILD_MODULE_ACHIEVEMENTS=OFF \
+        -DBUILD_MODULE_DUALSPEC=OFF \
+        -DBUILD_MODULE_BARBER=OFF \
+        -DBUILD_MODULE_TRAININGDUMMIES=OFF \
+        -DBUILD_PLAYERBOTS=ON \
         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
@@ -105,14 +114,14 @@ ENTRYPOINT ["/cmangos/entrypoint.sh"]
 # mangosd: world server
 ############################################################
 FROM runtime AS mangosd
-WORKDIR /cmangos/dist
+WORKDIR /cmangos/dist/bin
 CMD ["mangosd", "-c", "/cmangos/dist/etc/mangosd.conf"]
 
 ############################################################
 # realmd: auth server
 ############################################################
 FROM runtime AS realmd
-WORKDIR /cmangos/dist
+WORKDIR /cmangos/dist/bin
 CMD ["realmd", "-c", "/cmangos/dist/etc/realmd.conf"]
 
 ############################################################
@@ -127,6 +136,10 @@ USER $DOCKER_USER
 
 COPY --chown=$DOCKER_USER:$DOCKER_USER sql /cmangos/sql
 COPY --chown=$DOCKER_USER:$DOCKER_USER src/modules /cmangos/modules
+# PlayerBots is FetchContent'd by the build stage; pull just its SQL tree so
+# db-import.sh can apply the playerbots schema/data on first run.
+COPY --from=build --chown=$DOCKER_USER:$DOCKER_USER \
+    /cmangos/src/src/modules/PlayerBots/sql /cmangos/modules/PlayerBots/sql
 COPY --chown=$DOCKER_USER:$DOCKER_USER --chmod=755 \
     docker/db-import.sh /cmangos/db-import.sh
 

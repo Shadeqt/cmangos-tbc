@@ -32,6 +32,8 @@ set -euo pipefail
 : "${DB_CHARACTERS:=tbccharacters}"
 : "${DB_LOGS:=tbclogs}"
 : "${WORLD_DUMP_URL:=}"
+: "${REALM_ADDRESS:=127.0.0.1}"
+: "${REALM_PORT:=8085}"
 
 SQL_DIR=/cmangos/sql
 CUSTOM_SQL_DIR=/cmangos/custom-sql
@@ -142,6 +144,15 @@ for subdir in "${!updates_for_db[@]}"; do
 done
 log "applied $total_applied source-tree migration files"
 
+# Used by the modules loop below and the playerbots block further down.
+table_exists() {
+    local n
+    n=$(mysql_user --skip-column-names --silent \
+        -e "SELECT COUNT(*) FROM information_schema.tables \
+            WHERE table_schema='$1' AND table_name='$2';")
+    [[ "$n" -gt 0 ]]
+}
+
 # Apply SQL bundled with cmangos-modules-style modules. Each module under
 # /cmangos/modules/ may ship sql/install/<target>/*.sql where <target> is one
 # of world/characters/realmd/logs. Files within a module run in alphabetical
@@ -159,6 +170,15 @@ if [[ -d "$MODULES_DIR" ]]; then
         [logs]="$DB_LOGS"
     )
 
+    # Per-module characters-side gates: these modules ship DROP TABLE +
+    # CREATE TABLE for the characters DB. Without gating, every container
+    # restart would wipe player progress. Skip the characters install
+    # once the sentinel table exists.
+    declare -A module_characters_sentinel=(
+        [achievements]="character_achievement_progress"
+        [dualspec]="custom_dualspec_talent"
+    )
+
     module_applied=0
     for module_path in "$MODULES_DIR"/*/; do
         module_name=$(basename "$module_path")
@@ -167,6 +187,13 @@ if [[ -d "$MODULES_DIR" ]]; then
             install_dir="${module_path}sql/install/${target}"
             [[ -d "$install_dir" ]] || continue
             target_db="${module_db_for_target[$target]}"
+            if [[ "$target" == "characters" ]] && [[ -n "${module_characters_sentinel[$module_name]:-}" ]]; then
+                sentinel="${module_characters_sentinel[$module_name]}"
+                if table_exists "$DB_CHARACTERS" "$sentinel"; then
+                    log "skip modules/$module_name/sql/install/characters: sentinel '$sentinel' exists in $DB_CHARACTERS"
+                    continue
+                fi
+            fi
             for f in $(ls "$install_dir" 2>/dev/null | grep -E '\.sql$' | sort); do
                 log "applying modules/$module_name/sql/install/$target/$f → $target_db"
                 mysql_user "$target_db" < "$install_dir/$f"
@@ -175,6 +202,50 @@ if [[ -d "$MODULES_DIR" ]]; then
         done
     done
     log "applied $module_applied module install SQL files"
+fi
+
+# ---------------------------------------------------------------------------
+# Playerbots SQL bootstrap — run-once per DB, gated by sentinel-table existence.
+#
+# cmangos/playerbots SQL uses DROP TABLE IF EXISTS + CREATE TABLE + plain
+# INSERT INTO — re-running would wipe persistent bot state (random_bots,
+# db_store, cache, custom_strategy) and waste ~45 MB of lookup-table inserts.
+# We apply each DB's bundle once, gated by sentinel-table existence.
+# To re-seed a side: DROP its sentinel table and restart this container.
+#
+# The SQL tree is copied into the db-import image from the build stage's
+# FetchContent output (see Dockerfile: COPY --from=build .../PlayerBots/sql).
+# ---------------------------------------------------------------------------
+PLAYERBOTS_SQL=/cmangos/modules/PlayerBots/sql
+
+# table_exists is defined earlier (above the modules loop).
+
+apply_dir() {
+    local dir="$1" target_db="$2"
+    [[ -d "$dir" ]] || return 0
+    for f in $(ls "$dir" | grep -E '\.sql$' | sort); do
+        log "  applying $(basename "$dir")/$f → $target_db"
+        mysql_user "$target_db" < "$dir/$f"
+    done
+}
+
+if [[ -d "$PLAYERBOTS_SQL" ]]; then
+    if table_exists "$DB_WORLD" "ai_playerbot_named_location"; then
+        log "playerbots world SQL already applied — skipping"
+    else
+        log "seeding playerbots world DB (~45 MB, takes a couple of minutes)"
+        apply_dir "$PLAYERBOTS_SQL/world/tbc" "$DB_WORLD"
+        apply_dir "$PLAYERBOTS_SQL/world"     "$DB_WORLD"
+    fi
+
+    if table_exists "$DB_CHARACTERS" "ai_playerbot_random_bots"; then
+        log "playerbots characters SQL already applied — skipping"
+    else
+        log "seeding playerbots characters DB"
+        apply_dir "$PLAYERBOTS_SQL/characters" "$DB_CHARACTERS"
+    fi
+else
+    log "playerbots SQL not present at $PLAYERBOTS_SQL — skipping"
 fi
 
 # Apply user-supplied SQL from the bind-mounted custom-sql/ directory. Runs
@@ -203,11 +274,11 @@ fi
 # Realmlist row 1 — UPDATE-then-INSERT-IGNORE makes this safe whether or not
 # the upstream dump pre-populated the row. After the acore/cmangos port swap
 # cmangos-tbc holds the default WoW world port 8085 on the host.
-log "seeding realmlist id=1 → 127.0.0.1:8085 (host-exposed)"
+log "seeding realmlist id=1 → ${REALM_ADDRESS}:${REALM_PORT}"
 mysql_user "$DB_REALMD" <<SQL
-UPDATE realmlist SET name='cmangos', address='127.0.0.1', port=8085, realmbuilds='8606' WHERE id=1;
+UPDATE realmlist SET name='cmangos', address='${REALM_ADDRESS}', port=${REALM_PORT}, realmbuilds='8606' WHERE id=1;
 INSERT IGNORE INTO realmlist (id, name, address, port, icon, realmflags, timezone, allowedSecurityLevel, population, realmbuilds)
-VALUES (1, 'cmangos', '127.0.0.1', 8085, 1, 0, 1, 0, 0, '8606');
+VALUES (1, 'cmangos', '${REALM_ADDRESS}', ${REALM_PORT}, 1, 0, 1, 0, 0, '8606');
 SQL
 
 log "done"

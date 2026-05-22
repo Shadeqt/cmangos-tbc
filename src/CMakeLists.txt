@@ -50,6 +50,35 @@ else()
   endif()
 endif()
 
+# Local modules (sourced from this repository, not from cmangos-modules' modules.conf).
+# Must run BEFORE add_subdirectory(game): src/game/CMakeLists.txt does a file(GLOB)
+# scan of src/modules/* and calls add_dependencies(game <module>) for every folder
+# whose BUILD_MODULE_<NAME> flag is on, which requires the target to already exist.
+if(BUILD_MODULES)
+  # cmangos-modules base library. Its content was COPYed into src/modules/modules by
+  # the top-level CMakeLists from the local sibling working tree. The external-modules
+  # loop further down used to add_subdirectory this via the MODULES= entry in
+  # modules.conf, but that entry is now filtered out to keep the base library local.
+  add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/modules/modules)
+
+  file(GLOB LOCAL_MODULE_DIRS LIST_DIRECTORIES true ${CMAKE_CURRENT_SOURCE_DIR}/modules/*)
+  foreach(LOCAL_MODULE_DIR ${LOCAL_MODULE_DIRS})
+    if(IS_DIRECTORY ${LOCAL_MODULE_DIR})
+      get_filename_component(LOCAL_MODULE_NAME ${LOCAL_MODULE_DIR} NAME)
+      string(TOUPPER ${LOCAL_MODULE_NAME} LOCAL_MODULE_UPPER)
+      # Skip "modules" (already added above) and anything still tracked in modules.conf.
+      if(LOCAL_MODULE_UPPER STREQUAL "MODULES")
+        continue()
+      endif()
+      list(FIND MODULE_NAMES ${LOCAL_MODULE_UPPER} UPSTREAM_INDEX)
+      if(UPSTREAM_INDEX EQUAL -1 AND BUILD_MODULE_${LOCAL_MODULE_UPPER})
+        message(STATUS "Adding local module: ${LOCAL_MODULE_NAME}")
+        add_subdirectory(${LOCAL_MODULE_DIR})
+      endif()
+    endif()
+  endforeach()
+endif()
+
 if(BUILD_GAME_SERVER)
   add_subdirectory(game)
   add_subdirectory(mangosd)

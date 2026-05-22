@@ -41,6 +41,8 @@ services:
       - cm-network
     build:
       context: ..
+      additional_contexts:
+        cmangos-modules: ../../cmangos-modules
       target: db-import
       dockerfile: docker/Dockerfile
       args:
@@ -58,6 +60,8 @@ services:
       DB_CHARACTERS: ${CM_DB_CHARACTERS:-tbccharacters}
       DB_LOGS: ${CM_DB_LOGS:-tbclogs}
       WORLD_DUMP_URL: ${CM_WORLD_DUMP_URL:-}
+      REALM_ADDRESS: ${CM_REALM_ADDRESS:-127.0.0.1}
+      REALM_PORT: ${CM_WORLD_EXTERNAL_PORT:-8085}
     volumes:
       - ${CM_VOL_CUSTOM_SQL:-./custom-sql}:/cmangos/custom-sql:ro
     depends_on:
@@ -71,6 +75,8 @@ services:
       - cm-network
     build:
       context: ..
+      additional_contexts:
+        cmangos-modules: ../../cmangos-modules
       target: realmd
       dockerfile: docker/Dockerfile
       args:
@@ -78,6 +84,7 @@ services:
         GROUP_ID: ${CM_GROUP_ID:-1000}
         DOCKER_USER: ${CM_DOCKER_USER:-cmangos}
     environment:
+      TZ: ${CM_TZ:-Europe/Copenhagen}
       DB_HOST: cm-database
       DB_PORT: 3306
       DB_USER: ${CM_DB_USER:-mangos}
@@ -105,6 +112,8 @@ services:
       - cm-network
     build:
       context: ..
+      additional_contexts:
+        cmangos-modules: ../../cmangos-modules
       target: mangosd
       dockerfile: docker/Dockerfile
       args:
@@ -114,6 +123,7 @@ services:
     stdin_open: true
     tty: true
     environment:
+      TZ: ${CM_TZ:-Europe/Copenhagen}
       DB_HOST: cm-database
       DB_PORT: 3306
       DB_USER: ${CM_DB_USER:-mangos}
@@ -140,6 +150,8 @@ services:
     image: cmangos/extractor:${CM_IMAGE_TAG:-latest}
     build:
       context: ..
+      additional_contexts:
+        cmangos-modules: ../../cmangos-modules
       target: extractor
       dockerfile: docker/Dockerfile
       args:

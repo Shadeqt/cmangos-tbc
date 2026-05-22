@@ -21,7 +21,11 @@ render() {
     [[ -f "$dst" ]] && return 0
     [[ -f "$src" ]] || return 0
 
-    cp "$src" "$dst"
+    # cp -n: mangosd and realmd start in parallel and share this etc dir.
+    # Without -n, both pass the existence check above, both call cp, and the
+    # loser errors out with "File exists" under set -e. -n makes the loser
+    # silently no-op while the winner writes.
+    cp -n "$src" "$dst"
     local conn_realmd="${DB_HOST};${DB_PORT};${DB_USER};${DB_PASSWORD};${DB_REALMD}"
     local conn_world="${DB_HOST};${DB_PORT};${DB_USER};${DB_PASSWORD};${DB_WORLD}"
     local conn_chars="${DB_HOST};${DB_PORT};${DB_USER};${DB_PASSWORD};${DB_CHARACTERS}"
@@ -42,5 +46,12 @@ render() {
 
 render "$REF_DIR/mangosd.conf.dist" "$CONF_DIR/mangosd.conf"
 render "$REF_DIR/realmd.conf.dist"  "$CONF_DIR/realmd.conf"
+
+# Module configs: no DB/path substitutions needed, but render() handles the
+# "copy only if missing" semantics correctly for them too.
+render "$REF_DIR/achievements.conf.dist"   "$CONF_DIR/achievements.conf"
+render "$REF_DIR/dualspec.conf.dist"       "$CONF_DIR/dualspec.conf"
+render "$REF_DIR/barber.conf.dist"         "$CONF_DIR/barber.conf"
+render "$REF_DIR/trainingdummies.conf.dist" "$CONF_DIR/trainingdummies.conf"
 
 exec "$@"
