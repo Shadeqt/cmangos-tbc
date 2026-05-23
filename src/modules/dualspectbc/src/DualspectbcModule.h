@@ -29,7 +29,6 @@ namespace cmangos_module
         DUALSPEC_ERR_SAME_SPEC,
         DUALSPEC_ERR_OUT_OF_RANGE,
         DUALSPEC_ERR_NOT_LOADED,     // m_actionButtons ref not cached yet
-        // M4 reject codes — placeholder values, filled in then:
         DUALSPEC_ERR_DEAD,
         DUALSPEC_ERR_IN_COMBAT,
         DUALSPEC_ERR_WHILE_CASTING,
@@ -37,6 +36,12 @@ namespace cmangos_module
         DUALSPEC_ERR_IN_BG,
         DUALSPEC_ERR_ON_TAXI,
         DUALSPEC_ERR_IN_FORM,
+        // M6/M7 reject codes:
+        DUALSPEC_ERR_ALREADY_PURCHASED,  // .dualspec buy when specsCount > 1
+        DUALSPEC_ERR_NOT_ENOUGH_GOLD,    // .dualspec buy with insufficient funds
+        DUALSPEC_ERR_LEVEL_TOO_LOW,      // below DualSpec.MinLevel
+        DUALSPEC_ERR_DISABLED,           // DualSpec.Enable = 0
+        DUALSPEC_ERR_TARGET_NOT_FOUND,   // .dualspec grant <name> with no match
     };
 
     struct DualSpecState
@@ -92,15 +97,15 @@ namespace cmangos_module
         bool OnPreGossipHello(Player* player, Creature* creature) override;
         bool OnGossipSelect(Player* player, Creature* creature, uint32 sender, uint32 action, const std::string& code, uint32 gossipListId) override;
 
-        // M7: chat command surface. M3 ships `.dualspec_debug` for testing
-        // until M7 replaces it with the full `.dualspec` family.
-        const char* GetChatCommandPrefix() const override { return "dualspec_debug"; }
+        // M7: production chat command surface. Prefix is `.dualspec`;
+        // sub-commands are `status` / `1` / `2` / `buy` / `grant`.
+        const char* GetChatCommandPrefix() const override { return "dualspec"; }
         std::vector<ModuleChatCommand>* GetCommandTable() override;
 
         // M3: spec swap. Public so chat / gossip / addon dispatch can call it.
-        // bypassGating skips the M4 CanActivateSpec checks — only the
-        // .dualspec_debug commands set it, so manual test runs can drive
-        // mid-combat / mid-cast scenarios (Hunter's Mark across swap, etc.).
+        // bypassGating skips the M4 CanActivateSpec checks. Reserved for
+        // future debug paths; production commands and gossip always honor
+        // gating (pass the default false).
         DualSpecResult ActivateSpec(Player* player, uint8 spec, bool bypassGating = false);
 
         // M4: returns DUALSPEC_OK if the player's current gameplay state
@@ -108,6 +113,13 @@ namespace cmangos_module
         // No mutation — safe to call from gossip-menu visibility predicates
         // (M8) as well as from ActivateSpec.
         DualSpecResult CanActivateSpec(Player* player);
+
+        // M6: unlock the second spec. Atomic on DB transaction; rejects via
+        // CanActivateSpec gating; ALREADY_PURCHASED on second call. Does
+        // NOT deduct gold — caller is responsible (M7 `.dualspec buy`
+        // checks funds + deducts after a successful return; M8 gossip
+        // wires `gossip_menu_option.BoxMoney` for the same effect).
+        DualSpecResult UpdateSpecCount(Player* player, uint8 newCount);
 
     private:
         DualSpecState& GetOrCreateState(Player* player);
@@ -124,10 +136,11 @@ namespace cmangos_module
         // login.
         void StripOutgoingAuras(Player* swapper);
 
-        // M3 debug command handlers; removed at M7.
-        bool DebugCmdEnable(WorldSession* session, const std::string& args);
-        bool DebugCmdSwap(WorldSession* session, const std::string& args, uint8 spec);
-        bool DebugCmdStatus(WorldSession* session, const std::string& args);
+        // M7: production command handlers.
+        bool CmdStatus(WorldSession* session, const std::string& args);
+        bool CmdSwap(WorldSession* session, const std::string& args, uint8 spec);
+        bool CmdBuy(WorldSession* session, const std::string& args);
+        bool CmdGrant(WorldSession* session, const std::string& args);
 
         std::unordered_map<ObjectGuid, DualSpecState> m_state;
         std::vector<ModuleChatCommand> commandTable;

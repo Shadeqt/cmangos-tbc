@@ -3,6 +3,7 @@
 #include "Entities/Player.h"
 #include "BattleGround/BattleGround.h"
 #include "Database/DatabaseEnv.h"
+#include "Globals/ObjectAccessor.h"
 #include "Log/Log.h"
 #include "Maps/Map.h"
 #include "Server/WorldSession.h"
@@ -10,6 +11,7 @@
 #include "Spells/SpellMgr.h"
 #include "Chat/Chat.h"
 
+#include <cctype>
 #include <vector>
 
 namespace cmangos_module
@@ -588,84 +590,96 @@ namespace cmangos_module
         {
             switch (r)
             {
-                case DUALSPEC_OK:                return "ok";
-                case DUALSPEC_ERR_SAME_SPEC:     return "already active spec";
-                case DUALSPEC_ERR_OUT_OF_RANGE:  return "spec index out of range";
-                case DUALSPEC_ERR_NOT_LOADED:    return "internal: action buttons not yet loaded";
-                case DUALSPEC_ERR_DEAD:          return "you are dead";
-                case DUALSPEC_ERR_IN_COMBAT:     return "you are in combat";
-                case DUALSPEC_ERR_WHILE_CASTING: return "you are casting";
-                case DUALSPEC_ERR_IN_DUEL:       return "you are in a duel";
-                case DUALSPEC_ERR_IN_BG:         return "you are in a battleground";
-                case DUALSPEC_ERR_ON_TAXI:       return "you are on a taxi";
-                case DUALSPEC_ERR_IN_FORM:       return "you are shapeshifted";
-                default:                          return "unknown";
+                case DUALSPEC_OK:                     return "ok";
+                case DUALSPEC_ERR_SAME_SPEC:          return "already in that spec";
+                case DUALSPEC_ERR_OUT_OF_RANGE:       return "spec index out of range";
+                case DUALSPEC_ERR_NOT_LOADED:         return "internal: action buttons not yet loaded";
+                case DUALSPEC_ERR_DEAD:               return "you are dead";
+                case DUALSPEC_ERR_IN_COMBAT:          return "you are in combat";
+                case DUALSPEC_ERR_WHILE_CASTING:      return "you are casting";
+                case DUALSPEC_ERR_IN_DUEL:            return "you are in a duel";
+                case DUALSPEC_ERR_IN_BG:              return "you are in a battleground";
+                case DUALSPEC_ERR_ON_TAXI:            return "you are on a taxi";
+                case DUALSPEC_ERR_IN_FORM:            return "you are shapeshifted";
+                case DUALSPEC_ERR_ALREADY_PURCHASED:  return "second spec already purchased";
+                case DUALSPEC_ERR_NOT_ENOUGH_GOLD:    return "not enough gold";
+                case DUALSPEC_ERR_LEVEL_TOO_LOW:      return "level too low";
+                case DUALSPEC_ERR_DISABLED:           return "dual spec is disabled on this realm";
+                case DUALSPEC_ERR_TARGET_NOT_FOUND:   return "target player not found or offline";
+                default:                              return "unknown";
             }
+        }
+
+        std::string TrimCopy(const std::string& in)
+        {
+            auto b = in.begin();
+            while (b != in.end() && std::isspace(static_cast<unsigned char>(*b))) ++b;
+            auto e = in.end();
+            while (e != b && std::isspace(static_cast<unsigned char>(*(e - 1)))) --e;
+            return std::string(b, e);
         }
     }
 
-    // TODO(M7): remove debug command
-    bool DualspectbcModule::DebugCmdEnable(WorldSession* session, const std::string& /*args*/)
+    // === M6: UpdateSpecCount — atomic single-spec -> dual-spec promotion ===
+
+    DualSpecResult DualspectbcModule::UpdateSpecCount(Player* player, uint8 newCount)
     {
-        Player* player = SessionPlayer(session);
         if (!player)
-            return false;
+            return DUALSPEC_ERR_TARGET_NOT_FOUND;
+        if (newCount == 0 || newCount > MAX_TALENT_SPECS)
+            return DUALSPEC_ERR_OUT_OF_RANGE;
 
         DualSpecState& st = GetOrCreateState(player);
-        if (st.specsCount >= MAX_TALENT_SPECS)
-        {
-            ChatHandler(session).PSendSysMessage("dualspec_debug: already at specsCount=%u", uint32(st.specsCount));
-            return true;
-        }
+        if (newCount <= st.specsCount)
+            return DUALSPEC_ERR_ALREADY_PURCHASED;
+
+        // Same gameplay-state guard as ActivateSpec — no unlocking mid-combat,
+        // mid-cast, on taxi etc. Reuses the M4 predicate.
+        if (DualSpecResult gate = CanActivateSpec(player); gate != DUALSPEC_OK)
+            return gate;
 
         const uint32 lowguid = player->GetGUIDLow();
+        const uint8 srcSpec = st.activeSpec;
+        const uint8 dstSpec = uint8(newCount - 1);  // for newCount=2, dstSpec=1
+
+        // Single transaction for the action-bar duplication + the
+        // talentGroupsCount bump. If either statement fails, MySQL/InnoDB
+        // rolls back automatically — the player ends in their pre-call
+        // state. Gold deduction happens at the CALLER (M7 .dualspec buy)
+        // AFTER we return OK, so a transactional failure here leaves
+        // gold intact.
         CharacterDatabase.BeginTransaction();
-        // Duplicate the active spec's action bars into spec=1 so the swap
-        // doesn't strand the player with empty bars on first activation.
+        // Defensive: clear any orphaned spec=dstSpec rows from a partial
+        // prior attempt before re-INSERT.
         CharacterDatabase.PExecute(
             "DELETE FROM character_action WHERE guid = '%u' AND spec = '%u'",
-            lowguid, uint32(st.activeSpec ^ 1u));
+            lowguid, uint32(dstSpec));
         CharacterDatabase.PExecute(
             "INSERT INTO character_action (guid, spec, button, action, type)"
             " SELECT guid, '%u', button, action, type FROM character_action"
             " WHERE guid = '%u' AND spec = '%u'",
-            uint32(st.activeSpec ^ 1u), lowguid, uint32(st.activeSpec));
-        CharacterDatabase.CommitTransaction();
-
-        st.specsCount = MAX_TALENT_SPECS;
-        // Persisted at next OnSaveToDB; force-write the column now for
-        // immediate visibility.
+            uint32(dstSpec), lowguid, uint32(srcSpec));
         CharacterDatabase.PExecute(
             "UPDATE characters SET talentGroupsCount = '%u' WHERE guid = '%u'",
-            uint32(MAX_TALENT_SPECS), lowguid);
+            uint32(newCount), lowguid);
+        CharacterDatabase.CommitTransaction();
 
-        ChatHandler(session).PSendSysMessage(
-            "dualspec_debug: specsCount=%u, bars duplicated to spec=%u",
-            uint32(MAX_TALENT_SPECS), uint32(st.activeSpec ^ 1u));
-        return true;
+        // Sync in-memory state AFTER commit. If commit failed, MySQL
+        // already rolled back the rows; setting specsCount here without
+        // a commit-success signal would desync — but cmangos's
+        // CommitTransaction is fire-and-forget (returns void), so we
+        // trust the DB layer. The pre-commit DELETE is the rollback
+        // hedge for the next attempt.
+        st.specsCount = newCount;
+
+        sLog.outBasic("[DualSpec] guid=%u name=%s UpdateSpecCount -> specsCount=%u",
+                      lowguid, player->GetName(), uint32(newCount));
+        return DUALSPEC_OK;
     }
 
-    // TODO(M7): remove debug command
-    bool DualspectbcModule::DebugCmdSwap(WorldSession* session, const std::string& /*args*/, uint8 spec)
-    {
-        Player* player = SessionPlayer(session);
-        if (!player)
-            return false;
+    // === M7: production .dualspec chat commands ===
 
-        // Honors M4 gating. Originally passed bypassGating=true to allow
-        // in-combat M3.5 strip-testing; now that M3.5 is verified, the
-        // bypass became a footgun and was reverted (live test 2026-05-23).
-        // If a future test genuinely needs to drive a swap while gated,
-        // re-add a separate `.dualspec_debug force0|force1` command rather
-        // than re-arming the default path.
-        DualSpecResult r = ActivateSpec(player, spec);
-        ChatHandler(session).PSendSysMessage(
-            "dualspec_debug: ActivateSpec(%u) -> %s", uint32(spec), ResultText(r));
-        return true;
-    }
-
-    // TODO(M7): remove debug command
-    bool DualspectbcModule::DebugCmdStatus(WorldSession* session, const std::string& /*args*/)
+    bool DualspectbcModule::CmdStatus(WorldSession* session, const std::string& /*args*/)
     {
         Player* player = SessionPlayer(session);
         if (!player)
@@ -674,22 +688,148 @@ namespace cmangos_module
         DualSpecState* st = FindState(player);
         if (!st)
         {
-            ChatHandler(session).SendSysMessage("dualspec_debug: no state (player not loaded?)");
+            ChatHandler(session).SendSysMessage("|cff33aaffDualSpec:|r no state (not yet loaded)");
             return true;
         }
 
-        size_t spec0Count = 0;
-        size_t spec1Count = 0;
+        // Sum talent ranks per spec from the module's tracked map.
+        size_t pointsSpec1 = 0;
+        size_t pointsSpec2 = 0;
         for (auto const& kv : st->talents)
         {
-            if (kv.second & 1u) ++spec0Count;
-            if (kv.second & 2u) ++spec1Count;
+            if (kv.second & 1u) ++pointsSpec1;
+            if (kv.second & 2u) ++pointsSpec2;
         }
 
         ChatHandler(session).PSendSysMessage(
-            "dualspec_debug: activeSpec=%u specsCount=%u talents=%zu/%zu (spec0/spec1) actionsRef=%s",
-            uint32(st->activeSpec), uint32(st->specsCount),
-            spec0Count, spec1Count, st->actionsRef ? "set" : "null");
+            "|cff33aaffDualSpec:|r Active spec: %u | Spec count: %u | Points spent: spec1=%zu spec2=%zu",
+            uint32(st->activeSpec + 1u), uint32(st->specsCount),
+            pointsSpec1, pointsSpec2);
+        return true;
+    }
+
+    bool DualspectbcModule::CmdSwap(WorldSession* session, const std::string& /*args*/, uint8 spec)
+    {
+        // `spec` is the internal index (0 or 1). Caller-facing command is
+        // 1-indexed (`.dualspec 1` / `.dualspec 2`), translation happens in
+        // the OnInitialize lambdas where 1->0 and 2->1.
+        Player* player = SessionPlayer(session);
+        if (!player)
+            return false;
+
+        // Master switch — per plan A8.4: when DualSpec.Enable=0 the swap
+        // path is closed even for already-purchased dual-spec characters.
+        const DualspectbcModuleConfig* cfg = GetConfig();
+        if (!cfg || !cfg->enabled)
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r %s.", ResultText(DUALSPEC_ERR_DISABLED));
+            return true;
+        }
+
+        DualSpecResult r = ActivateSpec(player, spec);
+        if (r == DUALSPEC_OK)
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r switched to spec %u.", uint32(spec + 1u));
+        else
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r cannot switch: %s.", ResultText(r));
+        return true;
+    }
+
+    bool DualspectbcModule::CmdBuy(WorldSession* session, const std::string& /*args*/)
+    {
+        Player* player = SessionPlayer(session);
+        if (!player)
+            return false;
+
+        const DualspectbcModuleConfig* cfg = GetConfig();
+        if (!cfg || !cfg->enabled)
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r %s.", ResultText(DUALSPEC_ERR_DISABLED));
+            return true;
+        }
+
+        DualSpecState& st = GetOrCreateState(player);
+        if (st.specsCount >= MAX_TALENT_SPECS)
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r %s.", ResultText(DUALSPEC_ERR_ALREADY_PURCHASED));
+            return true;
+        }
+
+        if (player->GetLevel() < cfg->minLevel)
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r %s (need level %u).",
+                ResultText(DUALSPEC_ERR_LEVEL_TOO_LOW), uint32(cfg->minLevel));
+            return true;
+        }
+
+        // Funds check BEFORE the unlock attempt. UpdateSpecCount does NOT
+        // deduct gold itself, so a funds shortage here costs nothing.
+        if (player->GetMoney() < cfg->cost)
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r %s (cost: %u copper).",
+                ResultText(DUALSPEC_ERR_NOT_ENOUGH_GOLD), cfg->cost);
+            return true;
+        }
+
+        // Run UpdateSpecCount FIRST. On success, deduct gold. On failure,
+        // gold is untouched — atomic from the player's perspective.
+        DualSpecResult r = UpdateSpecCount(player, MAX_TALENT_SPECS);
+        if (r != DUALSPEC_OK)
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r purchase failed: %s.", ResultText(r));
+            return true;
+        }
+
+        player->ModifyMoney(-int32(cfg->cost));
+        ChatHandler(session).PSendSysMessage(
+            "|cff33aaffDualSpec:|r second spec unlocked. %u copper deducted.",
+            cfg->cost);
+        return true;
+    }
+
+    bool DualspectbcModule::CmdGrant(WorldSession* session, const std::string& args)
+    {
+        // GM-only via SEC_GAMEMASTER on the registration. Sender's own
+        // privileges are pre-checked by the framework dispatcher.
+        const std::string name = TrimCopy(args);
+        if (name.empty())
+        {
+            ChatHandler(session).SendSysMessage(
+                "|cff33aaffDualSpec:|r usage: .dualspec grant <player name>");
+            return true;
+        }
+
+        Player* target = ObjectAccessor::FindPlayerByName(name.c_str());
+        if (!target)
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r %s.", ResultText(DUALSPEC_ERR_TARGET_NOT_FOUND));
+            return true;
+        }
+
+        DualSpecResult r = UpdateSpecCount(target, MAX_TALENT_SPECS);
+        if (r == DUALSPEC_OK)
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r granted second spec to %s.", target->GetName());
+            // Courtesy notification to the recipient.
+            if (WorldSession* targetSession = target->GetSession())
+                ChatHandler(targetSession).SendSysMessage(
+                    "|cff33aaffDualSpec:|r a GM has granted you a second talent specialization.");
+        }
+        else
+        {
+            ChatHandler(session).PSendSysMessage(
+                "|cff33aaffDualSpec:|r grant to %s failed: %s.",
+                target->GetName(), ResultText(r));
+        }
         return true;
     }
 
@@ -712,26 +852,32 @@ namespace cmangos_module
         g_module = this;
 
         commandTable.clear();
-        // TODO(M7): drop the whole .dualspec_debug family once .dualspec
-        // production commands ship.
+        // Production .dualspec family. Player-facing index is 1-based:
+        // ".dualspec 1" = primary spec (internal 0), ".dualspec 2" =
+        // secondary spec (internal 1).
         commandTable.push_back({
-            "enable",
-            [](WorldSession* s, const std::string& args) { return g_module->DebugCmdEnable(s, args); },
-            SEC_GAMEMASTER
-        });
-        commandTable.push_back({
-            "0",
-            [](WorldSession* s, const std::string& args) { return g_module->DebugCmdSwap(s, args, 0); },
-            SEC_GAMEMASTER
+            "status",
+            [](WorldSession* s, const std::string& args) { return g_module->CmdStatus(s, args); },
+            SEC_PLAYER
         });
         commandTable.push_back({
             "1",
-            [](WorldSession* s, const std::string& args) { return g_module->DebugCmdSwap(s, args, 1); },
-            SEC_GAMEMASTER
+            [](WorldSession* s, const std::string& args) { return g_module->CmdSwap(s, args, 0); },
+            SEC_PLAYER
         });
         commandTable.push_back({
-            "status",
-            [](WorldSession* s, const std::string& args) { return g_module->DebugCmdStatus(s, args); },
+            "2",
+            [](WorldSession* s, const std::string& args) { return g_module->CmdSwap(s, args, 1); },
+            SEC_PLAYER
+        });
+        commandTable.push_back({
+            "buy",
+            [](WorldSession* s, const std::string& args) { return g_module->CmdBuy(s, args); },
+            SEC_PLAYER
+        });
+        commandTable.push_back({
+            "grant",
+            [](WorldSession* s, const std::string& args) { return g_module->CmdGrant(s, args); },
             SEC_GAMEMASTER
         });
     }
