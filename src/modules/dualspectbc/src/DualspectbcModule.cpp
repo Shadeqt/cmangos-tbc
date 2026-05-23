@@ -1,6 +1,7 @@
 #include "DualspectbcModule.h"
 
 #include "Entities/Player.h"
+#include "BattleGround/BattleGround.h"
 #include "Database/DatabaseEnv.h"
 #include "Log/Log.h"
 #include "Server/WorldSession.h"
@@ -260,19 +261,61 @@ namespace cmangos_module
         // mask becomes zero. Left as no-op for M2/M3.
     }
 
+    // === M4: gating predicate ===
+
+    DualSpecResult DualspectbcModule::CanActivateSpec(Player* player)
+    {
+        // Order matches the natural "is the player even available" -> "are
+        // they doing something blocking" progression. All checks are pure
+        // reads; calling this is safe in M8's gossip-visibility path.
+        if (!player->IsAlive())
+            return DUALSPEC_ERR_DEAD;
+        if (player->IsInCombat())
+            return DUALSPEC_ERR_IN_COMBAT;
+        if (player->IsNonMeleeSpellCasted(true))
+            return DUALSPEC_ERR_WHILE_CASTING;
+        if (player->duel)
+            return DUALSPEC_ERR_IN_DUEL;
+        if (BattleGround* bg = player->GetBattleGround())
+        {
+            if (bg->GetStatus() == STATUS_IN_PROGRESS)
+                return DUALSPEC_ERR_IN_BG;
+        }
+        if (player->IsTaxiFlying())
+            return DUALSPEC_ERR_ON_TAXI;
+        // IsShapeShifted (Unit.cpp:11418) honors the SHAPESHIFT_FLAG_STANCE
+        // bit, so warrior battle/defensive/berserker stances do NOT reject —
+        // only "real" forms (druid cat/bear/etc., rogue stealth, shadowform,
+        // ghost wolf). The plan's literal `GetShapeshiftForm() != FORM_NONE`
+        // would have permanently locked warriors out of swap.
+        if (player->IsShapeShifted())
+            return DUALSPEC_ERR_IN_FORM;
+        return DUALSPEC_OK;
+    }
+
     // === M3: ActivateSpec — live swap ===
 
-    DualSpecResult DualspectbcModule::ActivateSpec(Player* player, uint8 spec)
+    DualSpecResult DualspectbcModule::ActivateSpec(Player* player, uint8 spec, bool bypassGating)
     {
         DualSpecState& st = GetOrCreateState(player);
 
-        // Step 1: reject
+        // Step 1a: spec-argument validation (cheap, can't gate on state).
         if (spec == st.activeSpec)
             return DUALSPEC_ERR_SAME_SPEC;
         if (spec >= st.specsCount)
             return DUALSPEC_ERR_OUT_OF_RANGE;
         if (!st.actionsRef)
             return DUALSPEC_ERR_NOT_LOADED;
+
+        // Step 1b (M4): gameplay-state gating. Must reject BEFORE any state
+        // mutation in step 2+ for A4.5 atomicity. Skipped when the debug
+        // commands explicitly bypass (so manual tests can drive mid-combat
+        // / mid-cast scenarios like Hunter's Mark across swap).
+        if (!bypassGating)
+        {
+            if (DualSpecResult gate = CanActivateSpec(player); gate != DUALSPEC_OK)
+                return gate;
+        }
 
         const uint8 oldSpec = st.activeSpec;
         const uint8 oldMask = SpecMask(oldSpec);
@@ -357,6 +400,19 @@ namespace cmangos_module
         // somehow used > available (it shouldn't be).
         player->UpdateFreeTalentPoints(false);
 
+        // Step 10b: zero current power. Anti-exploit port of acore
+        // Player.cpp:15387-15391. Prevents using swap as a free rage /
+        // energy / mana refill. Mana is zeroed even when not the active
+        // type to close the druid-hybrid workaround (cat form's
+        // POWER_ENERGY active type would otherwise let the mana pool
+        // retain value across a swap).
+        {
+            Powers pw = player->GetPowerType();
+            if (pw != POWER_MANA)
+                player->SetPower(POWER_MANA, 0);
+            player->SetPower(pw, 0);
+        }
+
         // Step 11: load the new spec's action bars.
         LoadActionsForSpec(player, spec);
         player->SendInitialActionButtons();
@@ -373,10 +429,18 @@ namespace cmangos_module
         // call for any class — RemoveAurasDueToSpell is a no-op if absent.
         if (player->getClass() == CLASS_PALADIN)
             player->RemoveAurasDueToSpell(25780);
-        // TODO(M3-followup): sweep outgoing single-target auras (Hunter's
-        // Mark, Sap, Polymorph) cast in the old spec. cmangos-tbc has no
-        // direct equivalent of acore's GetSingleCastAuras; skipping for the
-        // initial M3 ship. Worst case the aura expires naturally.
+        // TODO(M3.5): strip ALL outgoing auras the player is the caster of.
+        // HARD REQUIREMENT, not optional polish — see saved memory
+        // project_dualspec_cast_aura_strip_requirement and plan §M3 step 12
+        // (reversed 2026-05-23). Iterate visible units in the player's grid;
+        // for each unit's GetSpellAuraHolderMap, drop any holder whose
+        // GetCasterGuid() == player->GetObjectGuid(). Covers buffs on allies
+        // (Mark of the Wild with Improved MotW) AND debuffs/CC on enemies
+        // (Hunter's Mark, Sap, Polymorph) — regardless of whether the
+        // source spell is still in m_spells post-swap. Anti-exploit:
+        // prevents the swap-to-buffer / cast / swap-back pattern.
+        // Diverges intentionally from acore's narrower GetSingleCastAuras
+        // semantics, which only sweep auras whose source spell was lost.
 
         // Step 13: bulk spellbook snapshot. The TBC talent frame re-renders
         // from m_spells + PLAYER_CHARACTER_POINTS1 on next open; this packet
@@ -467,7 +531,10 @@ namespace cmangos_module
         if (!player)
             return false;
 
-        DualSpecResult r = ActivateSpec(player, spec);
+        // bypassGating=true so the debug swap can drive mid-combat /
+        // mid-cast tests (Hunter's Mark across swap, etc.). M7's production
+        // .dualspec command will honor gating.
+        DualSpecResult r = ActivateSpec(player, spec, /*bypassGating=*/true);
         ChatHandler(session).PSendSysMessage(
             "dualspec_debug: ActivateSpec(%u) -> %s", uint32(spec), ResultText(r));
         return true;

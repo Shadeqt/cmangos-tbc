@@ -81,7 +81,16 @@ namespace cmangos_module
         std::vector<ModuleChatCommand>* GetCommandTable() override;
 
         // M3: spec swap. Public so chat / gossip / addon dispatch can call it.
-        DualSpecResult ActivateSpec(Player* player, uint8 spec);
+        // bypassGating skips the M4 CanActivateSpec checks — only the
+        // .dualspec_debug commands set it, so manual test runs can drive
+        // mid-combat / mid-cast scenarios (Hunter's Mark across swap, etc.).
+        DualSpecResult ActivateSpec(Player* player, uint8 spec, bool bypassGating = false);
+
+        // M4: returns DUALSPEC_OK if the player's current gameplay state
+        // permits a spec swap; otherwise the appropriate ERR_* reject.
+        // No mutation — safe to call from gossip-menu visibility predicates
+        // (M8) as well as from ActivateSpec.
+        DualSpecResult CanActivateSpec(Player* player);
 
     private:
         DualSpecState& GetOrCreateState(Player* player);
