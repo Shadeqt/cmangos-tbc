@@ -4,7 +4,10 @@
 #include "BattleGround/BattleGround.h"
 #include "Database/DatabaseEnv.h"
 #include "Log/Log.h"
+#include "Maps/Map.h"
 #include "Server/WorldSession.h"
+#include "Spells/Spell.h"
+#include "Spells/SpellMgr.h"
 #include "Chat/Chat.h"
 
 #include <vector>
@@ -261,6 +264,78 @@ namespace cmangos_module
         // mask becomes zero. Left as no-op for M2/M3.
     }
 
+    // === M3.5: outgoing-aura tracking + strip on swap ===
+
+    void DualspectbcModule::OnHit(Spell* spell, Unit* caster, Unit* victim)
+    {
+        // Gates, cheapest first. Self-casts (caster == victim) ARE tracked
+        // intentionally: a druid casting MotW on themselves then swapping
+        // would otherwise carry the talented buff across, defeating the
+        // anti-exploit. Strip-everything is the project mandate.
+        if (!caster || !victim)
+            return;
+        if (!caster->IsPlayer())
+            return;
+        if (!spell)
+            return;
+        SpellEntry const* spellInfo = spell->m_spellInfo;
+        if (!spellInfo)
+            return;
+        // Skip passive spells (auto-granted by talent / racial / item,
+        // not "cast on" anyone — auto-reapplied post-swap from m_spells).
+        if (spellInfo->HasAttribute(SPELL_ATTR_PASSIVE))
+            return;
+        // Only record if this spell actually applies an aura. Direct-damage
+        // spells (Frostbolt without a slow component) don't need tracking;
+        // keeps the set lean.
+        if (!IsSpellAppliesAura(spellInfo))
+            return;
+
+        Player* player = static_cast<Player*>(caster);
+        DualSpecState* st = FindState(player);
+        if (!st)
+            return;
+
+        st->outgoingAuras[victim->GetObjectGuid()].insert(spellInfo->Id);
+    }
+
+    void DualspectbcModule::StripOutgoingAuras(Player* swapper)
+    {
+        DualSpecState* st = FindState(swapper);
+        if (!st)
+            return;
+
+        const ObjectGuid swapperGuid = swapper->GetObjectGuid();
+        Map* map = swapper->GetMap();
+
+        // Online / same-map targets: resolve and strip in memory. Targets we
+        // can't reach (offline, cross-map, despawned) silently fall through
+        // to the DB sweep below.
+        for (auto const& kv : st->outgoingAuras)
+        {
+            Unit* target = map ? map->GetUnit(kv.first) : nullptr;
+            if (!target)
+                continue;
+            for (uint32 spellId : kv.second)
+                target->RemoveAurasByCasterSpell(spellId, swapperGuid);
+        }
+
+        st->outgoingAuras.clear();
+
+        // Phase 2: offline / unreachable targets. Single indexed DELETE on
+        // character_aura.caster_guid (column stores the full raw uint64 per
+        // Player.cpp:17109 — `holder->GetCasterGuid().GetRawValue()`). PK
+        // (guid, caster_guid, item_guid, spell) makes this index-eligible.
+        // Catches buffs on logged-out raid members so they don't reapply on
+        // their next login.
+        CharacterDatabase.PExecute(
+            "DELETE FROM character_aura WHERE caster_guid = '" UI64FMTD "'",
+            swapperGuid.GetRawValue());
+
+        sLog.outBasic("[DualSpec] guid=%u StripOutgoingAuras: in-memory cleared, character_aura swept",
+                      swapper->GetGUIDLow());
+    }
+
     // === M4: gating predicate ===
 
     DualSpecResult DualspectbcModule::CanActivateSpec(Player* player)
@@ -379,18 +454,33 @@ namespace cmangos_module
 
         // Step 8: ~~glyphs~~
 
-        // Step 9: sweep auras whose source spell is no longer learned. Catches
-        // self-buffs from talent passives that linger after the talent is gone.
+        // Step 9: sweep self-orphaned auras — auras the SWAPPER cast on
+        // themselves whose source spell is no longer learned. Catches
+        // self-buffs from talent passives that linger after the talent is
+        // gone (M3.5's OnHit tracker would also catch these for the
+        // common case, but step 9 is defense-in-depth for auras applied
+        // before the module loaded for this player).
+        //
+        // CRITICAL: filter on caster == swapper. The earlier draft of
+        // this loop removed ANY aura whose spell-id wasn't in
+        // `player->m_spells`, which wiped buffs OTHER players had cast
+        // on the swapper (a priest's PW:Fortitude on a paladin is not
+        // in the paladin's m_spells). Reported as a bug after live
+        // test 2026-05-23.
         {
             std::vector<uint32> orphans;
+            const ObjectGuid swapperGuid = player->GetObjectGuid();
             for (auto const& kv : player->GetSpellAuraHolderMap())
             {
+                SpellAuraHolder* holder = kv.second;
+                if (!holder || holder->GetCasterGuid() != swapperGuid)
+                    continue;
                 const uint32 spellId = kv.first;
                 if (!player->HasSpell(spellId))
                     orphans.push_back(spellId);
             }
             for (uint32 spellId : orphans)
-                player->RemoveAurasDueToSpell(spellId);
+                player->RemoveAurasByCasterSpell(spellId, swapperGuid);
         }
 
         // Step 10: recompute the talent-point pool. UpdateFreeTalentPoints
@@ -429,18 +519,14 @@ namespace cmangos_module
         // call for any class — RemoveAurasDueToSpell is a no-op if absent.
         if (player->getClass() == CLASS_PALADIN)
             player->RemoveAurasDueToSpell(25780);
-        // TODO(M3.5): strip ALL outgoing auras the player is the caster of.
-        // HARD REQUIREMENT, not optional polish — see saved memory
-        // project_dualspec_cast_aura_strip_requirement and plan §M3 step 12
-        // (reversed 2026-05-23). Iterate visible units in the player's grid;
-        // for each unit's GetSpellAuraHolderMap, drop any holder whose
-        // GetCasterGuid() == player->GetObjectGuid(). Covers buffs on allies
-        // (Mark of the Wild with Improved MotW) AND debuffs/CC on enemies
-        // (Hunter's Mark, Sap, Polymorph) — regardless of whether the
-        // source spell is still in m_spells post-swap. Anti-exploit:
-        // prevents the swap-to-buffer / cast / swap-back pattern.
-        // Diverges intentionally from acore's narrower GetSingleCastAuras
-        // semantics, which only sweep auras whose source spell was lost.
+        // M3.5: strip every aura the swapper cast — on others AND on
+        // themselves. Anti-exploit: prevents both the swap-to-buffer
+        // pattern (cast boosted MotW on raid → swap → raid keeps it)
+        // AND the self-buff variant (cast self-MotW in Improved MotW
+        // spec → swap → swapper keeps boosted self-buff). Tracker is
+        // populated by OnHit; this call drains it for in-world targets
+        // and DELETEs character_aura for offline targets.
+        StripOutgoingAuras(player);
 
         // Step 13: bulk spellbook snapshot. The TBC talent frame re-renders
         // from m_spells + PLAYER_CHARACTER_POINTS1 on next open; this packet

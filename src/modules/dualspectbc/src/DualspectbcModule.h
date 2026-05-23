@@ -9,7 +9,10 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+class Spell;
 
 class WorldSession;
 
@@ -47,6 +50,13 @@ namespace cmangos_module
         // hands us the reference); cleared in OnLogOut. ActivateSpec needs
         // direct map access for the pre-flip save and the post-flip clear.
         ActionButtonList* actionsRef = nullptr;
+        // M3.5: outgoing auras this player has cast — on others AND on
+        // themselves. Keyed by target guid (includes the swapper's own
+        // guid for self-cast buffs), valued by the set of spell ids
+        // active on that target. Populated via OnHit, drained on swap.
+        // Stale entries (target despawned, aura naturally expired) are
+        // harmless: RemoveAurasByCasterSpell is a no-op if not present.
+        std::unordered_map<ObjectGuid, std::unordered_set<uint32>> outgoingAuras;
     };
 
     class DualspectbcModule : public Module
@@ -70,6 +80,13 @@ namespace cmangos_module
         // M2 (LearnTalent integration) + M5 (spec-aware reset).
         void OnLearnTalent(Player* player, uint32 spellId) override;
         void OnResetTalents(Player* player, uint32 cost) override;
+
+        // M3.5: track outgoing auras the player applies on other units, so
+        // the swap can strip them. Fires after AddSpellAuraHolder runs
+        // inside DoSpellHitOnUnit (Spell.cpp:1358, unconditional of
+        // m_damage/m_healing) — works for both Moonfire-style damage+aura
+        // and Mark-of-the-Wild-style pure-buff casts.
+        void OnHit(Spell* spell, Unit* caster, Unit* victim) override;
 
         // M8: gossip-driven unlock + switch on the Talent Specialist NPC.
         bool OnPreGossipHello(Player* player, Creature* creature) override;
@@ -100,6 +117,12 @@ namespace cmangos_module
         // Shared helpers used by ActivateSpec and the action-button hooks.
         void SaveActionsForSpec(Player* player, ActionButtonList& buttons, uint8 spec);
         void LoadActionsForSpec(Player* player, uint8 spec);
+
+        // M3.5: drain the outgoing-aura tracker. Walks each tracked target,
+        // removes any matching holders, then DELETEs offline / cross-map
+        // targets' rows from character_aura so they don't reapply on next
+        // login.
+        void StripOutgoingAuras(Player* swapper);
 
         // M3 debug command handlers; removed at M7.
         bool DebugCmdEnable(WorldSession* session, const std::string& args);
