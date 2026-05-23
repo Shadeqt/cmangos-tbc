@@ -1,9 +1,9 @@
-#include "DualspecModuleConfig.h"
+#include "DualspectbcModuleConfig.h"
 
 namespace cmangos_module
 {
-    DualspecModuleConfig::DualspecModuleConfig()
-    : ModuleConfig("dualspec.conf")
+    DualspectbcModuleConfig::DualspectbcModuleConfig()
+    : ModuleConfig("dualspectbc.conf")
     , enabled(false)
     , minLevel(40)
     , cost(10000000)
@@ -11,7 +11,7 @@ namespace cmangos_module
     {
     }
 
-    bool DualspecModuleConfig::OnLoad()
+    bool DualspectbcModuleConfig::OnLoad()
     {
         enabled  = config.GetBoolDefault("DualSpec.Enable", false);
         minLevel = config.GetIntDefault ("DualSpec.MinLevel", 40);

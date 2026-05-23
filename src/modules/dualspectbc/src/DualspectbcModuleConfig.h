@@ -3,10 +3,10 @@
 
 namespace cmangos_module
 {
-    class DualspecModuleConfig : public ModuleConfig
+    class DualspectbcModuleConfig : public ModuleConfig
     {
     public:
-        DualspecModuleConfig();
+        DualspectbcModuleConfig();
         bool OnLoad() override;
 
     public:
