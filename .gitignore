@@ -101,4 +101,4 @@ cmake_install.cmake
 # Re-include any local modules tracked in this repo with a !src/modules/<name>/
 # line below.
 src/modules/*
-!src/modules/dualspec/
+!src/modules/dualspectbc/

@@ -63,7 +63,7 @@ RUN --mount=type=cache,target=/ccache,sharing=locked \
         -DBUILD_EXTRACTORS=ON \
         -DBUILD_MODULES=ON \
         -DBUILD_MODULE_ACHIEVEMENTS=OFF \
-        -DBUILD_MODULE_DUALSPEC=ON \
+        -DBUILD_MODULE_DUALSPECTBC=ON \
         -DBUILD_MODULE_BARBER=OFF \
         -DBUILD_MODULE_TRAININGDUMMIES=OFF \
         -DBUILD_PLAYERBOTS=ON \

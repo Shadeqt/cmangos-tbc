@@ -176,7 +176,7 @@ if [[ -d "$MODULES_DIR" ]]; then
     # once the sentinel table exists.
     declare -A module_characters_sentinel=(
         [achievements]="character_achievement_progress"
-        [dualspec]="custom_dualspec_talent"
+        [dualspectbc]="character_talent"
     )
 
     module_applied=0
