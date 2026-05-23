@@ -260,8 +260,43 @@ namespace cmangos_module
 
     void DualspectbcModule::OnResetTalents(Player* player, uint32 /*cost*/)
     {
-        // TODO(M5): clear active-spec bit in talents map and drop rows whose
-        // mask becomes zero. Left as no-op for M2/M3.
+        // Core's Player::resetTalents (Player.cpp:3988) is spec-blind on the
+        // spell side: it walks sTalentStore and removeSpell()s every talent
+        // rank for the class. For talents the player has learned in the
+        // ACTIVE spec, that successfully removes them from m_spells. For
+        // talents only present in the INACTIVE spec, removeSpell is a
+        // harmless no-op (player doesn't have the spell learned). Cost is
+        // already deducted character-wide via m_resetTalentsCost — per-spec
+        // cost tracking is NOT a thing in retail/acore (verified) so we
+        // don't touch it.
+        //
+        // The module's job: keep m_state[guid].talents in sync. Clear the
+        // active-spec bit from every entry; drop rows whose mask becomes 0.
+        // Persisted at next OnSaveToDB.
+        DualSpecState* st = FindState(player);
+        if (!st)
+            return;
+
+        const uint8 activeBit = SpecMask(st->activeSpec);
+        for (auto it = st->talents.begin(); it != st->talents.end(); )
+        {
+            const uint8 newMask = uint8(it->second & ~activeBit);
+            if (newMask == 0)
+                it = st->talents.erase(it);
+            else
+            {
+                it->second = newMask;
+                ++it;
+            }
+        }
+
+        // M3.5 outgoing-aura tracker entries for talent-cast self-buffs
+        // would auto-clear on the next swap; resetTalents itself doesn't
+        // trigger a swap, so we leave the tracker alone here. Auras
+        // applied by the now-removed talents linger only if their source
+        // spell wasn't unlearned by core's removeSpell — should not
+        // happen, but step 9's source-spell-lost sweep on the next swap
+        // would catch any residue.
     }
 
     // === M3.5: outgoing-aura tracking + strip on swap ===
