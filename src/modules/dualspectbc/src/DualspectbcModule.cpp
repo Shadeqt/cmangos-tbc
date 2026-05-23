@@ -1,6 +1,8 @@
 #include "DualspectbcModule.h"
 
 #include "Entities/Player.h"
+#include "Entities/Creature.h"
+#include "Entities/GossipDef.h"
 #include "BattleGround/BattleGround.h"
 #include "Database/DatabaseEnv.h"
 #include "Globals/ObjectAccessor.h"
@@ -737,63 +739,6 @@ namespace cmangos_module
         return true;
     }
 
-    bool DualspectbcModule::CmdBuy(WorldSession* session, const std::string& /*args*/)
-    {
-        Player* player = SessionPlayer(session);
-        if (!player)
-            return false;
-
-        const DualspectbcModuleConfig* cfg = GetConfig();
-        if (!cfg || !cfg->enabled)
-        {
-            ChatHandler(session).PSendSysMessage(
-                "|cff33aaffDualSpec:|r %s.", ResultText(DUALSPEC_ERR_DISABLED));
-            return true;
-        }
-
-        DualSpecState& st = GetOrCreateState(player);
-        if (st.specsCount >= MAX_TALENT_SPECS)
-        {
-            ChatHandler(session).PSendSysMessage(
-                "|cff33aaffDualSpec:|r %s.", ResultText(DUALSPEC_ERR_ALREADY_PURCHASED));
-            return true;
-        }
-
-        if (player->GetLevel() < cfg->minLevel)
-        {
-            ChatHandler(session).PSendSysMessage(
-                "|cff33aaffDualSpec:|r %s (need level %u).",
-                ResultText(DUALSPEC_ERR_LEVEL_TOO_LOW), uint32(cfg->minLevel));
-            return true;
-        }
-
-        // Funds check BEFORE the unlock attempt. UpdateSpecCount does NOT
-        // deduct gold itself, so a funds shortage here costs nothing.
-        if (player->GetMoney() < cfg->cost)
-        {
-            ChatHandler(session).PSendSysMessage(
-                "|cff33aaffDualSpec:|r %s (cost: %u copper).",
-                ResultText(DUALSPEC_ERR_NOT_ENOUGH_GOLD), cfg->cost);
-            return true;
-        }
-
-        // Run UpdateSpecCount FIRST. On success, deduct gold. On failure,
-        // gold is untouched — atomic from the player's perspective.
-        DualSpecResult r = UpdateSpecCount(player, MAX_TALENT_SPECS);
-        if (r != DUALSPEC_OK)
-        {
-            ChatHandler(session).PSendSysMessage(
-                "|cff33aaffDualSpec:|r purchase failed: %s.", ResultText(r));
-            return true;
-        }
-
-        player->ModifyMoney(-int32(cfg->cost));
-        ChatHandler(session).PSendSysMessage(
-            "|cff33aaffDualSpec:|r second spec unlocked. %u copper deducted.",
-            cfg->cost);
-        return true;
-    }
-
     bool DualspectbcModule::CmdGrant(WorldSession* session, const std::string& args)
     {
         // GM-only via SEC_GAMEMASTER on the registration. Sender's own
@@ -833,16 +778,110 @@ namespace cmangos_module
         return true;
     }
 
-    // === M7-stubbed gossip hooks ===
+    // === M8: gossip on class trainers — append the "learn second spec" option ===
 
-    bool DualspectbcModule::OnPreGossipHello(Player* /*player*/, Creature* /*creature*/)
+    namespace
     {
-        return false;
+        // Unique action code so OnGossipSelect can identify our injected
+        // option without colliding with any trainer's own menu actions.
+        // Pattern chosen far from 0/1/etc. — easy to grep, recognizable.
+        constexpr uint32 DUALSPEC_GOSSIP_ACTION_LEARN = 0xDDD15001u;
+        // `GOSSIP_SENDER_MAIN = 1` lives in ScriptDevAI's `sc_gossip.h`
+        // — we don't want to drag a scripting header into a module, so
+        // re-declare the same constant locally.
+        constexpr uint32 GOSSIP_SENDER_MAIN_LOCAL = 1u;
     }
 
-    bool DualspectbcModule::OnGossipSelect(Player* /*player*/, Creature* /*creature*/, uint32 /*sender*/, uint32 /*action*/, const std::string& /*code*/, uint32 /*gossipListId*/)
+    void DualspectbcModule::OnGossipHello(Player* player, Creature* creature)
     {
-        return false;
+        if (!player || !creature)
+            return;
+
+        const DualspectbcModuleConfig* cfg = GetConfig();
+        if (!cfg || !cfg->enabled)
+            return;
+
+        // Class-trainer match: IsTrainerOf returns true only when the
+        // trainer's TrainerClass equals the player's class (and the
+        // trainer has a non-empty spell list). Filters out class-mismatch
+        // trainers automatically.
+        if (!creature->IsTrainerOf(player, false))
+            return;
+
+        // Extra guard: IsTrainerOf also returns true for hunter pet
+        // trainers when the player is a hunter. Pet trainers don't
+        // offer talent reset and aren't where dual-spec belongs.
+        if (creature->GetCreatureInfo()->TrainerType != TRAINER_TYPE_CLASS)
+            return;
+
+        DualSpecState* st = FindState(player);
+        if (!st)
+            return;
+        if (st->specsCount >= MAX_TALENT_SPECS)
+            return;  // already purchased — auto-hide the option
+        if (player->GetLevel() < cfg->minLevel)
+            return;
+
+        // Append to the existing trainer menu. Core sends it after this
+        // hook returns; we don't suppress anything.
+        player->GetPlayerMenu()->GetGossipMenu().AddMenuItem(
+            GOSSIP_ICON_TRAINER,
+            "I'd like to learn a second talent specialization.",
+            GOSSIP_SENDER_MAIN_LOCAL,
+            DUALSPEC_GOSSIP_ACTION_LEARN,
+            "Are you sure you want to purchase a second talent specialization?",
+            cfg->cost);
+    }
+
+    bool DualspectbcModule::OnGossipSelect(Player* player, Creature* creature, uint32 /*sender*/, uint32 action, const std::string& /*code*/, uint32 /*gossipListId*/)
+    {
+        if (!player || !creature)
+            return false;
+
+        if (action != DUALSPEC_GOSSIP_ACTION_LEARN)
+            return false;  // not our option — let the trainer script handle it
+
+        // IMPORTANT: when our hook returns true, NPCHandler.cpp:369-370
+        // short-circuits and core's `Player::OnGossipSelect` never runs —
+        // which means the BoxMoney auto-deduction at Player.cpp:12593 is
+        // skipped. We have to handle the money ourselves. Same shape as
+        // the old chat-only .dualspec buy command pre-M8.
+        const DualspectbcModuleConfig* cfg = GetConfig();
+        const uint32 cost = cfg ? cfg->cost : 0;
+
+        // Funds gate. The client BoxMoney popup typically prevents Accept
+        // when broke, but a cheater could spoof the packet — enforce
+        // server-side.
+        if (cost > 0 && player->GetMoney() < cost)
+        {
+            player->GetPlayerMenu()->CloseGossip();
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "|cff33aaffDualSpec:|r %s (cost: %u copper).",
+                ResultText(DUALSPEC_ERR_NOT_ENOUGH_GOLD), cost);
+            return true;
+        }
+
+        // Run UpdateSpecCount FIRST. On success, deduct. On failure
+        // (gating trip, DB rollback), gold is untouched — atomic from
+        // the player's perspective.
+        DualSpecResult r = UpdateSpecCount(player, MAX_TALENT_SPECS);
+
+        player->GetPlayerMenu()->CloseGossip();
+
+        if (r == DUALSPEC_OK)
+        {
+            if (cost > 0)
+                player->ModifyMoney(-int32(cost));
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "|cff33aaffDualSpec:|r second talent specialization unlocked.");
+        }
+        else
+        {
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "|cff33aaffDualSpec:|r purchase failed: %s.", ResultText(r));
+        }
+
+        return true;
     }
 
     // === Chat command table registration ===
@@ -854,7 +893,8 @@ namespace cmangos_module
         commandTable.clear();
         // Production .dualspec family. Player-facing index is 1-based:
         // ".dualspec 1" = primary spec (internal 0), ".dualspec 2" =
-        // secondary spec (internal 1).
+        // secondary spec (internal 1). `.dualspec buy` was removed at M8
+        // — purchase is gossip-only via class trainers now.
         commandTable.push_back({
             "status",
             [](WorldSession* s, const std::string& args) { return g_module->CmdStatus(s, args); },
@@ -868,11 +908,6 @@ namespace cmangos_module
         commandTable.push_back({
             "2",
             [](WorldSession* s, const std::string& args) { return g_module->CmdSwap(s, args, 1); },
-            SEC_PLAYER
-        });
-        commandTable.push_back({
-            "buy",
-            [](WorldSession* s, const std::string& args) { return g_module->CmdBuy(s, args); },
             SEC_PLAYER
         });
         commandTable.push_back({

@@ -21,9 +21,5 @@ namespace cmangos_module
 
         // Purchase cost in copper. 10000000 = 1000 gold (WotLK default).
         uint32 cost;
-
-        // creature_template.entry of the Talent Specialist NPC. 0 disables
-        // the NPC-driven flow; chat commands still work.
-        uint32 npcEntry;
     };
 }

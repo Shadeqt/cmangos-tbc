@@ -93,12 +93,16 @@ namespace cmangos_module
         // and Mark-of-the-Wild-style pure-buff casts.
         void OnHit(Spell* spell, Unit* caster, Unit* victim) override;
 
-        // M8: gossip-driven unlock + switch on the Talent Specialist NPC.
-        bool OnPreGossipHello(Player* player, Creature* creature) override;
+        // M8: gossip-driven unlock attached to class trainers. We use
+        // OnGossipHello (post-build, append-only) NOT OnPreGossipHello —
+        // we just want to add an option to the trainer's existing menu,
+        // not replace it.
+        void OnGossipHello(Player* player, Creature* creature) override;
         bool OnGossipSelect(Player* player, Creature* creature, uint32 sender, uint32 action, const std::string& code, uint32 gossipListId) override;
 
         // M7: production chat command surface. Prefix is `.dualspec`;
-        // sub-commands are `status` / `1` / `2` / `buy` / `grant`.
+        // sub-commands are `status` / `1` / `2` / `grant`.
+        // `buy` was removed at M8 — purchase is gossip-only now.
         const char* GetChatCommandPrefix() const override { return "dualspec"; }
         std::vector<ModuleChatCommand>* GetCommandTable() override;
 
@@ -136,10 +140,10 @@ namespace cmangos_module
         // login.
         void StripOutgoingAuras(Player* swapper);
 
-        // M7: production command handlers.
+        // M7: production command handlers. (CmdBuy removed at M8 — the
+        // purchase path is now gossip-only via class trainers.)
         bool CmdStatus(WorldSession* session, const std::string& args);
         bool CmdSwap(WorldSession* session, const std::string& args, uint8 spec);
-        bool CmdBuy(WorldSession* session, const std::string& args);
         bool CmdGrant(WorldSession* session, const std::string& args);
 
         std::unordered_map<ObjectGuid, DualSpecState> m_state;

@@ -17,16 +17,10 @@
 #
 #    DualSpec.Cost
 #        Cost in copper to purchase a second talent specialization.
-#        10000000 copper = 1000 gold (WotLK retail default). The gossip
-#        flow auto-deducts via gossip_menu_option.BoxMoney; the chat
-#        .dualspec buy path deducts manually after UpdateSpecCount.
+#        10000000 copper = 1000 gold (WotLK retail default). Auto-deducted
+#        by core via the gossip BoxMoney path when the player confirms at
+#        a class trainer.
 #        Default: 10000000
-#
-#    DualSpec.NPCEntry
-#        creature_template.entry of the Talent Specialist NPC that offers
-#        the purchase + switch gossip options. 0 disables the NPC-driven
-#        flow entirely; chat commands still work.
-#        Default: 0 (no NPC wired -- set this when M8 lands the NPC seed)
 #
 ###################################################################################################################
 
@@ -34,4 +28,3 @@ DualSpec.Enable = 0
 
 DualSpec.MinLevel = 40
 DualSpec.Cost = 10000000
-DualSpec.NPCEntry = 0
