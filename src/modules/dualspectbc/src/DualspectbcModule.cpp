@@ -90,6 +90,19 @@ namespace cmangos_module
             }
             while (result->NextRow());
         }
+
+        // Catches existing characters who were already past minLevel when
+        // DualSpec.AutoGrant was flipped on; the OnGiveLevel hook covers
+        // the live-crossing case.
+        TryAutoGrant(player);
+    }
+
+    void DualspectbcModule::OnGiveLevel(Player* player, uint32 /*level*/)
+    {
+        // SetLevel runs at Player.cpp:2862, well before this hook fires at
+        // :2911, so player->GetLevel() returns the new level by the time
+        // TryAutoGrant inspects it.
+        TryAutoGrant(player);
     }
 
     void DualspectbcModule::OnSaveToDB(Player* player)
@@ -624,7 +637,7 @@ namespace cmangos_module
 
     // === M6: UpdateSpecCount — atomic single-spec -> dual-spec promotion ===
 
-    DualSpecResult DualspectbcModule::UpdateSpecCount(Player* player, uint8 newCount)
+    DualSpecResult DualspectbcModule::UpdateSpecCount(Player* player, uint8 newCount, bool bypassGating)
     {
         if (!player)
             return DUALSPEC_ERR_TARGET_NOT_FOUND;
@@ -636,9 +649,14 @@ namespace cmangos_module
             return DUALSPEC_ERR_ALREADY_PURCHASED;
 
         // Same gameplay-state guard as ActivateSpec — no unlocking mid-combat,
-        // mid-cast, on taxi etc. Reuses the M4 predicate.
-        if (DualSpecResult gate = CanActivateSpec(player); gate != DUALSPEC_OK)
-            return gate;
+        // mid-cast, on taxi etc. Reuses the M4 predicate. AutoGrant bypasses
+        // (the grant is server-driven; deferring on combat-tagged level-up
+        // would silently strand the player at single-spec until next login).
+        if (!bypassGating)
+        {
+            if (DualSpecResult gate = CanActivateSpec(player); gate != DUALSPEC_OK)
+                return gate;
+        }
 
         const uint32 lowguid = player->GetGUIDLow();
         const uint8 srcSpec = st.activeSpec;
@@ -677,6 +695,25 @@ namespace cmangos_module
         sLog.outBasic("[DualSpec] guid=%u name=%s UpdateSpecCount -> specsCount=%u",
                       lowguid, player->GetName(), uint32(newCount));
         return DUALSPEC_OK;
+    }
+
+    void DualspectbcModule::TryAutoGrant(Player* player)
+    {
+        if (!player)
+            return;
+
+        const DualspectbcModuleConfig* cfg = GetConfig();
+        if (!cfg || !cfg->enabled || !cfg->autoGrant)
+            return;
+
+        DualSpecState* st = FindState(player);
+        if (!st || st->specsCount >= MAX_TALENT_SPECS)
+            return;
+
+        if (player->GetLevel() < cfg->minLevel)
+            return;
+
+        UpdateSpecCount(player, MAX_TALENT_SPECS, /*bypassGating=*/true);
     }
 
     // === M7: production .dualspec chat commands ===

@@ -79,6 +79,10 @@ namespace cmangos_module
         void OnSaveToDB(Player* player) override;
         void OnLogOut(Player* player) override;
         void OnCharacterCreated(Player* player) override;
+        // Post-M8: hook the level-up fire point so AutoGrant catches the
+        // player crossing MinLevel live (no relog required). OnLoadFromDB
+        // covers the existing-character-already-past-MinLevel case.
+        void OnGiveLevel(Player* player, uint32 level) override;
         bool OnLoadActionButtons(Player* player, ActionButtonList& actionButtons) override;
         bool OnSaveActionButtons(Player* player, ActionButtonList& actionButtons) override;
 
@@ -123,7 +127,11 @@ namespace cmangos_module
         // NOT deduct gold — caller is responsible (M7 `.dualspec buy`
         // checks funds + deducts after a successful return; M8 gossip
         // wires `gossip_menu_option.BoxMoney` for the same effect).
-        DualSpecResult UpdateSpecCount(Player* player, uint8 newCount);
+        // bypassGating skips the CanActivateSpec predicate — reserved for
+        // server-driven grants (AutoGrant) where there is no player action
+        // to gate against. Production player-driven paths (gossip, chat)
+        // pass the default false.
+        DualSpecResult UpdateSpecCount(Player* player, uint8 newCount, bool bypassGating = false);
 
     private:
         DualSpecState& GetOrCreateState(Player* player);
@@ -145,6 +153,14 @@ namespace cmangos_module
         bool CmdStatus(WorldSession* session, const std::string& args);
         bool CmdSwap(WorldSession* session, const std::string& args, uint8 spec);
         bool CmdGrant(WorldSession* session, const std::string& args);
+
+        // Post-M8: shared AutoGrant entry point. Called from OnGiveLevel
+        // and OnLoadFromDB. No-op unless cfg->enabled && cfg->autoGrant,
+        // the player is still single-spec, and they're at-or-above
+        // minLevel. Bypasses gating so combat-tagged level-ups still grant
+        // (the player didn't trigger it — there's nothing to defer to a
+        // safer state, and no aura/power side-effects to police).
+        void TryAutoGrant(Player* player);
 
         std::unordered_map<ObjectGuid, DualSpecState> m_state;
         std::vector<ModuleChatCommand> commandTable;

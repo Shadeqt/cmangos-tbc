@@ -22,9 +22,20 @@
 #        a class trainer.
 #        Default: 10000000
 #
+#    DualSpec.AutoGrant
+#        When 1, the second spec is granted for free the moment a character
+#        reaches DualSpec.MinLevel — no trainer visit, no gold deduction.
+#        Existing characters already past MinLevel auto-promote on their
+#        next login after the flag is flipped on. When 1 the gossip
+#        purchase option and the cost knob are effectively dead — the same
+#        MinLevel gate fronts both paths, and auto-grant wins.
+#        Default: 0 (disable; purchase via class trainer or .dualspec buy)
+#                 1 (enable; free grant at MinLevel)
+#
 ###################################################################################################################
 
 DualSpec.Enable = 0
 
 DualSpec.MinLevel = 40
 DualSpec.Cost = 10000000
+DualSpec.AutoGrant = 0
