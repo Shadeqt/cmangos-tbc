@@ -6,6 +6,14 @@
 src/shared/revision_nr.h eol=lf
 src/shared/revision_sql.h eol=lf
 
+# Shell scripts and Dockerfiles run inside Linux containers — they must
+# stay LF even when checked out on Windows. Without this, autocrlf turns
+# them into CRLF and the in-container exec fails with
+# "no such file or directory" (the shebang line breaks).
+*.sh         eol=lf
+Dockerfile   eol=lf
+*.Dockerfile eol=lf
+
 # Whitespace rules
 # strict (no trailing, no tabs)
 *.cpp        whitespace=trailing-space,space-before-tab,tab-in-indent,cr-at-eol
