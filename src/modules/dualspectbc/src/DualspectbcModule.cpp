@@ -617,10 +617,13 @@ namespace cmangos_module
         if (!player)
             return false;
 
-        // bypassGating=true so the debug swap can drive mid-combat /
-        // mid-cast tests (Hunter's Mark across swap, etc.). M7's production
-        // .dualspec command will honor gating.
-        DualSpecResult r = ActivateSpec(player, spec, /*bypassGating=*/true);
+        // Honors M4 gating. Originally passed bypassGating=true to allow
+        // in-combat M3.5 strip-testing; now that M3.5 is verified, the
+        // bypass became a footgun and was reverted (live test 2026-05-23).
+        // If a future test genuinely needs to drive a swap while gated,
+        // re-add a separate `.dualspec_debug force0|force1` command rather
+        // than re-arming the default path.
+        DualSpecResult r = ActivateSpec(player, spec);
         ChatHandler(session).PSendSysMessage(
             "dualspec_debug: ActivateSpec(%u) -> %s", uint32(spec), ResultText(r));
         return true;
